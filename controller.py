@@ -24,18 +24,18 @@ class TrafficExperiment:
         ew_prob = total_probability * (1.0 - imbalance_ratio)
         
         xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-                        <routes>
-                            <vType id="standard_car" length="5.0" maxSpeed="15.0" accel="2.6" decel="4.5" sigma="0.5"/>
-                            <route id="west_to_east" edges="-E2 E0"/>
-                            <route id="east_to_west" edges="-E0 E2"/>
-                            <route id="north_to_south" edges="-E1 E3"/>
-                            <route id="south_to_north" edges="-E3 E1"/>
-                            
-                            <flow id="flow_WE" type="standard_car" route="west_to_east" begin="0" end="500" probability="{ew_prob:.3f}"/>
-                            <flow id="flow_EW" type="standard_car" route="east_to_west" begin="0" end="500" probability="{ew_prob:.3f}"/>
-                            <flow id="flow_NS" type="standard_car" route="north_to_south" begin="0" end="500" probability="{ns_prob:.3f}"/>
-                            <flow id="flow_SN" type="standard_car" route="south_to_north" begin="0" end="500" probability="{ns_prob:.3f}"/>
-                        </routes>"""
+<routes>
+    <vType id="standard_car" length="5.0" maxSpeed="15.0" accel="2.6" decel="4.5" sigma="0.5"/>
+    <route id="west_to_east" edges="-E2 E0"/>
+    <route id="east_to_west" edges="-E0 E2"/>
+    <route id="north_to_south" edges="-E1 E3"/>
+    <route id="south_to_north" edges="-E3 E1"/>
+    
+    <flow id="flow_WE" type="standard_car" route="west_to_east" begin="0" end="500" probability="{ew_prob:.3f}"/>
+    <flow id="flow_EW" type="standard_car" route="east_to_west" begin="0" end="500" probability="{ew_prob:.3f}"/>
+    <flow id="flow_NS" type="standard_car" route="north_to_south" begin="0" end="500" probability="{ns_prob:.3f}"/>
+    <flow id="flow_SN" type="standard_car" route="south_to_north" begin="0" end="500" probability="{ns_prob:.3f}"/>
+</routes>"""
 
         with open(self.route_file, 'w') as f:
             f.write(xml_content)
