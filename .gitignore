@@ -1,2 +1,4 @@
 *.csv
+*.png
+traffic.rou.xml
 __pycache__/
