@@ -52,24 +52,34 @@ class TrafficExperiment:
         ])
 
     def run(self, total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5) -> None:
-        """Executes the simulation loop for a specified number of steps."""
+        """Executes the simulation loop for a specified number of steps and collect metrics."""
         self.generate_route_file(total_prob, imbalance)
         self.start_sim()
         step = 0
+        
+        # Map directional identifiers to their corresponding incoming edge IDs
+        incoming_edges = {
+            "west": "-E2",
+            "east": "-E0",
+            "north": "-E1",
+            "south": "-E3"
+        }
         
         try: 
             while step < total_steps:
                 traci.simulationStep()
                 
-                # Measure halted vehicles (queue length) on incoming approaches
-                halted_west = traci.edge.getLastStepHaltingNumber("-E2")   # West approach
-                halted_north = traci.edge.getLastStepHaltingNumber("-E1")  # North approach
+                step_metrics = {"step": step}
                 
-                self.metrics.append({
-                    "step": step,
-                    "west_queue_length": halted_west,
-                    "north_queue_length": halted_north
-                })
+                # 1 & 2. Measure queue length and waiting time (delay) per direction
+                for direction, edge_id in incoming_edges.items():
+                    step_metrics[f"{direction}_queue"] = traci.edge.getLastStepHaltingNumber(edge_id)
+                    step_metrics[f"{direction}_delay"] = traci.edge.getWaitingTime(edge_id)
+                
+                # 3. Measure total intersection throughput for the current step
+                step_metrics["throughput"] = traci.simulation.getArrivedNumber()
+                
+                self.metrics.append(step_metrics)
                 
                 time.sleep(0.05)  # Pace GUI visualization
                 step += 1
