@@ -1,6 +1,7 @@
 import traci
 import time
 import pandas as pd
+import sqlite3
 
 class TrafficExperiment:
     """Manages a SUMO traffic simulation experiment via TraCI.
@@ -51,7 +52,7 @@ class TrafficExperiment:
             "--quit-on-end"
         ])
 
-    def run(self, total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5) -> None:
+    def run(self, strategy: str = "fixed", total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
         """Executes the simulation loop for a specified number of steps and collect metrics."""
         self.generate_route_file(total_prob, imbalance)
         self.start_sim()
@@ -80,29 +81,52 @@ class TrafficExperiment:
                 step_metrics["throughput"] = traci.simulation.getArrivedNumber()
                 
                 self.metrics.append(step_metrics)
-                
+
                 time.sleep(0.05)  # Pace GUI visualization
                 step += 1
         except Exception as e:
-            print(f"Simulation ended due to error {step}: {e}")
+            print(f"Simulation error: {e}")
         finally:
             try:
                 traci.close()
             except traci.exceptions.FatalTraCIError:
                 print("TraCI server was already closed.")
+            except Exception:
+                pass
             
-            self.export_data()
+            # Pass the metadata to the database export
+            self.export_data(strategy, imbalance, seed)
 
-    def export_data(self) -> None:
-        """Saves recorded simulation metrics into baseline_metrics.csv."""
+    def export_data(self, strategy: str, imbalance: float, seed: int) -> None:
+        """Appends recorded simulation metrics and metadata into SQLite database (idempotently)."""
         if not self.metrics:
             print("No metrics collected to export.")
             return
 
         df = pd.DataFrame(self.metrics)
-        df.to_csv("baseline_metrics.csv", index=False)
-        print("Experiment complete. Metrics exported to baseline_metrics.csv")
+        df['strategy'] = strategy
+        df['imbalance'] = imbalance
+        df['seed'] = seed
+        
+        conn = sqlite3.connect("research_data.db")
+        cursor = conn.cursor()
+        
+        # Make the insertion idempotent by clearing out old data for this specific run
+        try:
+            cursor.execute(
+                "DELETE FROM simulation_metrics WHERE strategy=? AND imbalance=? AND seed=?", 
+                (strategy, imbalance, seed)
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            # Safely ignore the error if this is the very first run and the table does not exist yet
+            pass
+            
+        # Append the fresh simulation data to SQLite database
+        df.to_sql("simulation_metrics", conn, if_exists="append", index=False)
+        conn.close()
+        print("Experiment complete. Metrics exported to SQLite database (research_data.db).")
 
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")
-    experiment.run(total_steps=500, total_prob=0.2, imbalance=0.9)
+    experiment.run(strategy="fixed", total_steps=500, total_prob=0.4, imbalance=0.6, seed=42)
