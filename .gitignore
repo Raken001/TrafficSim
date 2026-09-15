@@ -1,5 +1,7 @@
 *.csv
 *.png
+*.db
+*.sqlite3
 traffic.rou.xml
 __pycache__/
 .vscode/
