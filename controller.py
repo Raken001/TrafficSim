@@ -2,6 +2,7 @@ import traci
 import time
 import pandas as pd
 import sqlite3
+from strategies import SignalStrategy, FixedTimeStrategy
 
 class TrafficExperiment:
     """Manages a SUMO traffic simulation experiment via TraCI.
@@ -53,7 +54,7 @@ class TrafficExperiment:
             "--quit-on-end"
         ])
 
-    def run(self, strategy: str = "fixed", total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
+    def run(self, strategy: SignalStrategy, total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
         """Executes the simulation loop for a specified number of steps and collect metrics."""
         self.generate_route_file(total_prob, imbalance)
         self.start_sim(seed)
@@ -67,21 +68,49 @@ class TrafficExperiment:
             "south": "-E3"
         }
         
+        # --- Traffic light control setup ---
+        tls_id = "J0"
+        current_phase = 0
+        time_in_phase = 0
+        
+        # Take full Python control of the traffic light by setting an
+        # indefinite phase duration so SUMO never auto-advances phases.
+        traci.trafficlight.setPhase(tls_id, current_phase)
+        traci.trafficlight.setPhaseDuration(tls_id, 99999)
+        
         try: 
             while step < total_steps:
                 traci.simulationStep()
                 
                 step_metrics = {"step": step}
+                queue_data = {}
+                delay_data = {}
                 
                 # 1 & 2. Measure queue length and waiting time (delay) per direction
                 for direction, edge_id in incoming_edges.items():
-                    step_metrics[f"{direction}_queue"] = traci.edge.getLastStepHaltingNumber(edge_id)
-                    step_metrics[f"{direction}_delay"] = traci.edge.getWaitingTime(edge_id)
+                    queue = traci.edge.getLastStepHaltingNumber(edge_id)
+                    delay = traci.edge.getWaitingTime(edge_id)
+                    step_metrics[f"{direction}_queue"] = queue
+                    step_metrics[f"{direction}_delay"] = delay
+                    queue_data[direction] = queue
+                    delay_data[direction] = delay
                 
                 # 3. Measure total intersection throughput for the current step
                 step_metrics["throughput"] = traci.simulation.getArrivedNumber()
                 
                 self.metrics.append(step_metrics)
+                
+                # --- Strategy-driven phase control ---
+                time_in_phase += 1
+                new_phase = strategy.determine_phase(
+                    current_phase, time_in_phase, queue_data, delay_data
+                )
+                
+                if new_phase != current_phase:
+                    current_phase = new_phase
+                    time_in_phase = 0
+                    traci.trafficlight.setPhase(tls_id, current_phase)
+                    traci.trafficlight.setPhaseDuration(tls_id, 99999)
 
                 #time.sleep(0.05)  # Pace GUI visualization
                 step += 1
@@ -96,7 +125,7 @@ class TrafficExperiment:
                 pass
             
             # Pass the metadata to the database export
-            self.export_data(strategy, imbalance, seed)
+            self.export_data(strategy.name, imbalance, seed)
 
     def export_data(self, strategy: str, imbalance: float, seed: int) -> None:
         """Appends recorded simulation metrics and metadata into SQLite database (idempotently)."""
@@ -130,4 +159,4 @@ class TrafficExperiment:
 
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")
-    experiment.run(strategy="fixed", total_steps=500, total_prob=0.4, imbalance=0.7, seed=42)
+    experiment.run(strategy=FixedTimeStrategy(), total_steps=500, total_prob=0.4, imbalance=0.7, seed=42)
