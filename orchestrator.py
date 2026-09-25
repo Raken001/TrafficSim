@@ -1,11 +1,11 @@
 from controller import TrafficExperiment
-from strategies import FixedTimeStrategy
+from strategies import FixedTimeStrategy, AdaptiveStrategy
 from analyze_metrics import generate_research_plots
 
 def run_experiments():
     imbalances = [0.5, 0.7, 0.9]
     seeds = [42, 105]  
-    strategies = [FixedTimeStrategy()]
+    strategies = [FixedTimeStrategy(), AdaptiveStrategy()]
     
     for imbalance in imbalances:
         for seed in seeds:
