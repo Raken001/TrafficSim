@@ -4,7 +4,7 @@ from analyze_metrics import generate_research_plots
 
 def run_experiments():
     imbalances = [0.5, 0.7, 0.9]
-    seeds = [42, 105]  
+    seeds = [42, 105, 256, 789, 1024, 1337, 2048, 9999]
     strategies = [FixedTimeStrategy(), AdaptiveStrategy()]
     
     for imbalance in imbalances:
