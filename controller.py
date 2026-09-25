@@ -42,20 +42,21 @@ class TrafficExperiment:
             f.write(xml_content)
         print(f"Generated {self.route_file} (NS: {ns_prob:.3f}, EW: {ew_prob:.3f})")
 
-    def start_sim(self) -> None:
+    def start_sim(self, seed: int = 42) -> None:
         """Initializes and launches the SUMO TraCI GUI server session."""
         # Note: Replace "sumo-gui" with "sumo" for headless execution
         traci.start([
             "sumo-gui", 
             "-n", self.network_file, 
             "-r", self.route_file, 
+            "--seed", str(seed),
             "--quit-on-end"
         ])
 
     def run(self, strategy: str = "fixed", total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
         """Executes the simulation loop for a specified number of steps and collect metrics."""
         self.generate_route_file(total_prob, imbalance)
-        self.start_sim()
+        self.start_sim(seed)
         step = 0
         
         # Map directional identifiers to their corresponding incoming edge IDs
@@ -82,7 +83,7 @@ class TrafficExperiment:
                 
                 self.metrics.append(step_metrics)
 
-                time.sleep(0.05)  # Pace GUI visualization
+                #time.sleep(0.05)  # Pace GUI visualization
                 step += 1
         except Exception as e:
             print(f"Simulation error: {e}")
@@ -129,4 +130,4 @@ class TrafficExperiment:
 
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")
-    experiment.run(strategy="fixed", total_steps=500, total_prob=0.4, imbalance=0.6, seed=42)
+    experiment.run(strategy="fixed", total_steps=500, total_prob=0.4, imbalance=0.7, seed=42)
