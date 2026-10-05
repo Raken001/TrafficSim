@@ -79,8 +79,12 @@ class TrafficExperiment:
             ]
         traci.start(sumo_cmd)
 
-    def run(self, strategy: SignalStrategy, total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
-        """Executes the simulation loop for a specified number of steps and collect metrics."""
+    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
+        """Executes the simulation loop for a specified number of steps and collect metrics.
+        
+        :param warmup_steps: Number of initial steps to run without recording metrics,
+                             allowing the network to fill with a steady state of traffic.
+        """
         self.generate_route_file(total_prob, imbalance)
         
         # Unique per-run file so parallel runs (Progress Report 3) never collide
@@ -111,25 +115,17 @@ class TrafficExperiment:
             while step < total_steps:
                 traci.simulationStep()
                 
-                step_metrics = {"step": step}
+                # --- Strategy-driven phase control ---
+                # We do this even during warmup so the traffic light behaves normally
                 queue_data = {}
                 delay_data = {}
                 
-                # 1 & 2. Measure queue length and waiting time (delay) per direction
                 for direction, edge_id in incoming_edges.items():
                     queue = traci.edge.getLastStepHaltingNumber(edge_id)
                     delay = traci.edge.getWaitingTime(edge_id)
-                    step_metrics[f"{direction}_queue"] = queue
-                    step_metrics[f"{direction}_delay"] = delay
                     queue_data[direction] = queue
                     delay_data[direction] = delay
                 
-                # 3. Measure total intersection throughput for the current step
-                step_metrics["throughput"] = traci.simulation.getArrivedNumber()
-                
-                self.metrics.append(step_metrics)
-                
-                # --- Strategy-driven phase control ---
                 time_in_phase += 1
                 new_phase = strategy.determine_phase(
                     current_phase, time_in_phase, queue_data, delay_data
@@ -141,7 +137,17 @@ class TrafficExperiment:
                     traci.trafficlight.setPhase(tls_id, current_phase)
                     traci.trafficlight.setPhaseDuration(tls_id, 99999)
 
-                #time.sleep(0.05)  # Pace GUI visualization
+                # --- Data Collection (Post-Warmup Only) ---
+                if step >= warmup_steps:
+                    step_metrics = {"step": step}
+                    for direction in incoming_edges.keys():
+                        step_metrics[f"{direction}_queue"] = queue_data[direction]
+                        step_metrics[f"{direction}_delay"] = delay_data[direction]
+                    
+                    # Measure total intersection throughput for the current step
+                    step_metrics["throughput"] = traci.simulation.getArrivedNumber()
+                    self.metrics.append(step_metrics)
+
                 step += 1
         except Exception as e:
             print(f"Simulation error: {e}")
@@ -156,7 +162,7 @@ class TrafficExperiment:
             # Pass the metadata to the database export
             self.export_data(strategy.name, imbalance, seed)
             # SUMO only finishes writing tripinfo once TraCI is closed, so this must come after close()
-            self.export_trip_data(tripinfo_file, strategy.name, imbalance, seed)
+            self.export_trip_data(tripinfo_file, strategy.name, imbalance, seed, warmup_time=float(warmup_steps))
 
     def export_data(self, strategy: str, imbalance: float, seed: int) -> None:
         """Appends recorded simulation metrics and metadata into SQLite database (idempotently)."""
@@ -188,11 +194,12 @@ class TrafficExperiment:
         conn.close()
         print("Experiment complete. Metrics exported to SQLite database (research_data.db).")
 
-    def export_trip_data(self, tripinfo_file: str, strategy: str, imbalance: float, seed: int) -> None:
+    def export_trip_data(self, tripinfo_file: str, strategy: str, imbalance: float, seed: int, warmup_time: float = 100.0) -> None:
         """Parses SUMO's per-vehicle tripinfo XML into the vehicle_trips table (idempotently).
         
         Each row is one vehicle. Vehicles still in the network when the simulation
         ended are kept and flagged with finished=0 (SUMO writes arrival=-1 for them).
+        Vehicles that departed during the warmup period are excluded from the dataset.
         The temporary XML file is deleted after a successful import.
         """
         if not os.path.exists(tripinfo_file):
@@ -208,6 +215,10 @@ class TrafficExperiment:
 
         rows = []
         for trip in root.iter("tripinfo"):
+            depart = float(trip.get("depart"))
+            if depart < warmup_time:
+                continue  # Skip vehicles that departed during warmup
+                
             vehicle_id = trip.get("id")
             flow_id = vehicle_id.split(".")[0]
             origin, axis = FLOW_DIRECTIONS.get(flow_id, ("unknown", "unknown"))
@@ -216,7 +227,7 @@ class TrafficExperiment:
                 "vehicle_id": vehicle_id,
                 "origin": origin,
                 "axis": axis,
-                "depart": float(trip.get("depart")),
+                "depart": depart,
                 "arrival": arrival,
                 "finished": int(arrival >= 0),
                 "duration": float(trip.get("duration")),
