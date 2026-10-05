@@ -1,8 +1,19 @@
 import traci
 import time
+import os
+import xml.etree.ElementTree as ET
 import pandas as pd
 import sqlite3
-from strategies import SignalStrategy, FixedTimeStrategy
+from strategies import AdaptiveStrategy, SignalStrategy, FixedTimeStrategy
+
+# Maps the flow ID prefix of each vehicle (e.g. "flow_NS.12") to its origin
+# approach and signal axis. NS is the major axis whenever imbalance > 0.5.
+FLOW_DIRECTIONS = {
+    "flow_NS": ("north", "NS"),
+    "flow_SN": ("south", "NS"),
+    "flow_WE": ("west", "EW"),
+    "flow_EW": ("east", "EW"),
+}
 
 class TrafficExperiment:
     """Manages a SUMO traffic simulation experiment via TraCI.
@@ -43,21 +54,39 @@ class TrafficExperiment:
             f.write(xml_content)
         print(f"Generated {self.route_file} (NS: {ns_prob:.3f}, EW: {ew_prob:.3f})")
 
-    def start_sim(self, seed: int = 42) -> None:
-        """Initializes and launches the SUMO TraCI GUI server session."""
+    def start_sim(self, seed: int = 42, tripinfo_file: str = None) -> None:
+        """Initializes and launches the SUMO TraCI GUI server session.
+        
+        :param seed: Random seed passed to SUMO for reproducible vehicle arrivals.
+        :param tripinfo_file: If given, SUMO writes per-vehicle trip statistics
+                              (waitingTime, timeLoss, etc.) to this XML file.
+        """
         # Note: Replace "sumo-gui" with "sumo" for headless execution
-        traci.start([
-            "sumo-gui", 
+        sumo_cmd = [
+            "sumo", 
             "-n", self.network_file, 
             "-r", self.route_file, 
             "--seed", str(seed),
             "--quit-on-end"
-        ])
+        ]
+        if tripinfo_file:
+            # write-unfinished also records vehicles still in the network when the
+            # simulation ends, so strategies that leave long queues are not
+            # rewarded by having their slowest vehicles silently dropped.
+            sumo_cmd += [
+                "--tripinfo-output", tripinfo_file,
+                "--tripinfo-output.write-unfinished",
+            ]
+        traci.start(sumo_cmd)
 
     def run(self, strategy: SignalStrategy, total_steps: int = 500, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
         """Executes the simulation loop for a specified number of steps and collect metrics."""
         self.generate_route_file(total_prob, imbalance)
-        self.start_sim(seed)
+        
+        # Unique per-run file so parallel runs (Progress Report 3) never collide
+        os.makedirs("output", exist_ok=True)
+        tripinfo_file = os.path.join("output", f"tripinfo_{strategy.name}_imb{imbalance}_seed{seed}.xml")
+        self.start_sim(seed, tripinfo_file)
         step = 0
         
         # Map directional identifiers to their corresponding incoming edge IDs
@@ -126,6 +155,8 @@ class TrafficExperiment:
             
             # Pass the metadata to the database export
             self.export_data(strategy.name, imbalance, seed)
+            # SUMO only finishes writing tripinfo once TraCI is closed, so this must come after close()
+            self.export_trip_data(tripinfo_file, strategy.name, imbalance, seed)
 
     def export_data(self, strategy: str, imbalance: float, seed: int) -> None:
         """Appends recorded simulation metrics and metadata into SQLite database (idempotently)."""
@@ -157,6 +188,70 @@ class TrafficExperiment:
         conn.close()
         print("Experiment complete. Metrics exported to SQLite database (research_data.db).")
 
+    def export_trip_data(self, tripinfo_file: str, strategy: str, imbalance: float, seed: int) -> None:
+        """Parses SUMO's per-vehicle tripinfo XML into the vehicle_trips table (idempotently).
+        
+        Each row is one vehicle. Vehicles still in the network when the simulation
+        ended are kept and flagged with finished=0 (SUMO writes arrival=-1 for them).
+        The temporary XML file is deleted after a successful import.
+        """
+        if not os.path.exists(tripinfo_file):
+            print(f"No tripinfo file found at {tripinfo_file}; skipping trip export.")
+            return
+
+        try:
+            root = ET.parse(tripinfo_file).getroot()
+        except ET.ParseError as e:
+            # Happens if SUMO was killed before it could finish writing the file
+            print(f"Could not parse {tripinfo_file}: {e}")
+            return
+
+        rows = []
+        for trip in root.iter("tripinfo"):
+            vehicle_id = trip.get("id")
+            flow_id = vehicle_id.split(".")[0]
+            origin, axis = FLOW_DIRECTIONS.get(flow_id, ("unknown", "unknown"))
+            arrival = float(trip.get("arrival"))
+            rows.append({
+                "vehicle_id": vehicle_id,
+                "origin": origin,
+                "axis": axis,
+                "depart": float(trip.get("depart")),
+                "arrival": arrival,
+                "finished": int(arrival >= 0),
+                "duration": float(trip.get("duration")),
+                "waiting_time": float(trip.get("waitingTime")),
+                "waiting_count": int(trip.get("waitingCount")),
+                "time_loss": float(trip.get("timeLoss")),
+                "depart_delay": float(trip.get("departDelay")),
+            })
+
+        if not rows:
+            print("Tripinfo file contained no vehicles; skipping trip export.")
+            return
+
+        df = pd.DataFrame(rows)
+        df['strategy'] = strategy
+        df['imbalance'] = imbalance
+        df['seed'] = seed
+
+        conn = sqlite3.connect("research_data.db")
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM vehicle_trips WHERE strategy=? AND imbalance=? AND seed=?",
+                (strategy, imbalance, seed)
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            # Table does not exist yet on the very first run
+            pass
+        df.to_sql("vehicle_trips", conn, if_exists="append", index=False)
+        conn.close()
+
+        os.remove(tripinfo_file)
+        print(f"Exported {len(df)} vehicle trips ({int(df['finished'].sum())} finished) to vehicle_trips.")
+
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")
-    experiment.run(strategy=FixedTimeStrategy(), total_steps=500, total_prob=0.4, imbalance=0.7, seed=42)
+    experiment.run(strategy=AdaptiveStrategy(), total_steps=500, total_prob=0.4, imbalance=0.9, seed=42)

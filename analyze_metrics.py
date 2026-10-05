@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import sqlite3
 import os
@@ -53,6 +54,105 @@ def generate_research_plots(strategy: str = "fixed", imbalance: float = 0.5, see
     plt.savefig(output_file, dpi=300)
     plt.close()  # Closes the figure to prevent memory exhaustion in loops
     print(f"Analysis complete. Research graphs successfully saved to {output_file}")
+
+
+# ---------------------------------------------------------------------- #
+# Aggregate (cross-seed) comparison plots
+# ---------------------------------------------------------------------- #
+STRATEGY_STYLE = {
+    "fixed_time": {"label": "Fixed-Time", "color": "#64748b"},
+    "adaptive":   {"label": "Adaptive",   "color": "#2563eb"},
+}
+IMBALANCE_LABELS = {0.5: "50/50", 0.7: "70/30", 0.9: "90/10"}
+
+
+def _imbalance_label(value: float) -> str:
+    return IMBALANCE_LABELS.get(round(value, 2), str(value))
+
+
+def _grouped_bars(ax, conditions: pd.DataFrame, metric: str, series: list, title: str, ylabel: str):
+    """Draws grouped bars (x = imbalance) with 95% CI error bars.
+    
+    :param series: list of (strategy, metric_name, legend_label, color, hatch) tuples
+    """
+    imbalances = sorted(conditions["imbalance"].unique())
+    x = np.arange(len(imbalances))
+    width = 0.8 / len(series)
+
+    for i, (strategy, metric_name, label, color, hatch) in enumerate(series):
+        subset = (conditions[(conditions["strategy"] == strategy) & (conditions["metric"] == metric_name)]
+                  .set_index("imbalance").reindex(imbalances))
+        offset = (i - (len(series) - 1) / 2) * width
+        ax.bar(x + offset, subset["mean"], width, yerr=subset["ci95"], capsize=4,
+               label=label, color=color, hatch=hatch, edgecolor="white", linewidth=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([_imbalance_label(v) for v in imbalances])
+    ax.set_xlabel("Traffic Split (NS / EW)")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=8)
+
+
+def _strategy_series(metric: str):
+    return [(s, metric, style["label"], style["color"], None) for s, style in STRATEGY_STYLE.items()]
+
+
+def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "results") -> None:
+    """Generates cross-seed comparison figures from the condition_summary table.
+    
+    Bars show the mean across seeds; error bars show the 95% confidence interval.
+    Produces:
+        comparison_efficiency.png - delay, waiting time, max queue, throughput
+        comparison_fairness.png   - per-axis delay, per-axis max wait, EW/NS delay ratio
+    """
+    if conditions.empty:
+        print("No condition summary data available for comparison plots.")
+        return
+    os.makedirs(output_dir, exist_ok=True)
+    n_seeds = int(conditions["n"].max())
+
+    # --- Figure 1: overall efficiency ---
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    panels = [
+        ("avg_delay", "Average Vehicle Delay", "Time loss per vehicle (s)"),
+        ("avg_waiting_time", "Average Waiting Time", "Stopped time per vehicle (s)"),
+        ("max_queue", "Maximum Queue Length", "Halting vehicles (all approaches)"),
+        ("throughput", "Intersection Throughput", "Vehicles completed"),
+    ]
+    for ax, (metric, title, ylabel) in zip(axes.flat, panels):
+        _grouped_bars(ax, conditions, metric, _strategy_series(metric), title, ylabel)
+    fig.suptitle(f"Fixed-Time vs. Adaptive Control: Efficiency (mean ± 95% CI, n={n_seeds} seeds)", fontsize=13)
+    fig.tight_layout()
+    efficiency_file = os.path.join(output_dir, "comparison_efficiency.png")
+    fig.savefig(efficiency_file, dpi=300)
+    plt.close(fig)
+
+    # --- Figure 2: directional fairness ---
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.5))
+    axis_series = lambda metric_suffix: [
+        (s, f"{axis}_{metric_suffix}", f"{style['label']} - {axis.upper()}", style["color"], hatch)
+        for s, style in STRATEGY_STYLE.items()
+        for axis, hatch in (("ns", None), ("ew", "//"))
+    ]
+    _grouped_bars(axes[0], conditions, "ns_avg_delay", axis_series("avg_delay"),
+                  "Average Delay by Direction", "Time loss per vehicle (s)")
+    _grouped_bars(axes[1], conditions, "ns_max_wait", axis_series("max_wait"),
+                  "Worst-Case Wait by Direction", "Max individual waiting time (s)")
+    _grouped_bars(axes[2], conditions, "ew_ns_delay_ratio", _strategy_series("ew_ns_delay_ratio"),
+                  "Minor/Major Delay Ratio (EW / NS)", "Ratio (1.0 = equal delay)")
+    axes[2].axhline(1.0, color="black", linestyle=":", linewidth=1)
+    fig.suptitle(f"Directional Fairness (mean ± 95% CI, n={n_seeds} seeds). NS is the major axis when split > 50/50",
+                 fontsize=13)
+    fig.tight_layout()
+    fairness_file = os.path.join(output_dir, "comparison_fairness.png")
+    fig.savefig(fairness_file, dpi=300)
+    plt.close(fig)
+
+    print(f"Comparison plots saved to {efficiency_file} and {fairness_file}")
+
 
 if __name__ == "__main__":
     generate_research_plots(strategy="fixed", imbalance=0.9, seed=42)
