@@ -31,7 +31,7 @@ class TrafficExperiment:
         self.route_file = route_file
         self.metrics = []
 
-    def generate_route_file(self, total_probability: float = 0.2, imbalance_ratio: float = 0.5) -> None:
+    def generate_route_file(self, total_steps: int = 600, total_probability: float = 0.2, imbalance_ratio: float = 0.5) -> None:
         """Dynamically builds the traffic.rou.xml file based on imbalance ratio."""
         ns_prob = total_probability * imbalance_ratio
         ew_prob = total_probability * (1.0 - imbalance_ratio)
@@ -44,10 +44,10 @@ class TrafficExperiment:
     <route id="north_to_south" edges="-E1 E3"/>
     <route id="south_to_north" edges="-E3 E1"/>
     
-    <flow id="flow_WE" type="standard_car" route="west_to_east" begin="0" end="500" probability="{ew_prob:.3f}"/>
-    <flow id="flow_EW" type="standard_car" route="east_to_west" begin="0" end="500" probability="{ew_prob:.3f}"/>
-    <flow id="flow_NS" type="standard_car" route="north_to_south" begin="0" end="500" probability="{ns_prob:.3f}"/>
-    <flow id="flow_SN" type="standard_car" route="south_to_north" begin="0" end="500" probability="{ns_prob:.3f}"/>
+    <flow id="flow_WE" type="standard_car" route="west_to_east" begin="0" end="{total_steps}" probability="{ew_prob:.3f}"/>
+    <flow id="flow_EW" type="standard_car" route="east_to_west" begin="0" end="{total_steps}" probability="{ew_prob:.3f}"/>
+    <flow id="flow_NS" type="standard_car" route="north_to_south" begin="0" end="{total_steps}" probability="{ns_prob:.3f}"/>
+    <flow id="flow_SN" type="standard_car" route="south_to_north" begin="0" end="{total_steps}" probability="{ns_prob:.3f}"/>
 </routes>"""
 
         with open(self.route_file, 'w') as f:
@@ -87,7 +87,7 @@ class TrafficExperiment:
                              allowing the network to fill with a steady state of traffic.
         :param use_gui: Whether to run with the GUI and sleep delay.
         """
-        self.generate_route_file(total_prob, imbalance)
+        self.generate_route_file(total_steps, total_prob, imbalance)
         
         # Unique per-run file so parallel runs (Progress Report 3) never collide
         os.makedirs("output", exist_ok=True)
