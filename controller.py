@@ -54,16 +54,17 @@ class TrafficExperiment:
             f.write(xml_content)
         print(f"Generated {self.route_file} (NS: {ns_prob:.3f}, EW: {ew_prob:.3f})")
 
-    def start_sim(self, seed: int = 42, tripinfo_file: str = None) -> None:
-        """Initializes and launches the SUMO TraCI GUI server session.
+    def start_sim(self, seed: int = 42, tripinfo_file: str = None, use_gui: bool = False) -> None:
+        """Initializes and launches the SUMO TraCI server session.
         
         :param seed: Random seed passed to SUMO for reproducible vehicle arrivals.
         :param tripinfo_file: If given, SUMO writes per-vehicle trip statistics
                               (waitingTime, timeLoss, etc.) to this XML file.
+        :param use_gui: If True, uses sumo-gui; otherwise uses headless sumo.
         """
-        # Note: Replace "sumo-gui" with "sumo" for headless execution
+        sumo_binary = "sumo-gui" if use_gui else "sumo"
         sumo_cmd = [
-            "sumo", 
+            sumo_binary, 
             "-n", self.network_file, 
             "-r", self.route_file, 
             "--seed", str(seed),
@@ -79,18 +80,19 @@ class TrafficExperiment:
             ]
         traci.start(sumo_cmd)
 
-    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42) -> None:
+    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42, use_gui: bool = False) -> None:
         """Executes the simulation loop for a specified number of steps and collect metrics.
         
         :param warmup_steps: Number of initial steps to run without recording metrics,
                              allowing the network to fill with a steady state of traffic.
+        :param use_gui: Whether to run with the GUI and sleep delay.
         """
         self.generate_route_file(total_prob, imbalance)
         
         # Unique per-run file so parallel runs (Progress Report 3) never collide
         os.makedirs("output", exist_ok=True)
         tripinfo_file = os.path.join("output", f"tripinfo_{strategy.name}_imb{imbalance}_seed{seed}.xml")
-        self.start_sim(seed, tripinfo_file)
+        self.start_sim(seed, tripinfo_file, use_gui)
         step = 0
         
         # Map directional identifiers to their corresponding incoming edge IDs
@@ -114,6 +116,8 @@ class TrafficExperiment:
         try: 
             while step < total_steps:
                 traci.simulationStep()
+                if use_gui:
+                    time.sleep(0.05)
                 
                 # --- Strategy-driven phase control ---
                 # We do this even during warmup so the traffic light behaves normally
@@ -265,4 +269,4 @@ class TrafficExperiment:
 
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")
-    experiment.run(strategy=AdaptiveStrategy(), total_steps=500, total_prob=0.4, imbalance=0.9, seed=42)
+    experiment.run(strategy=AdaptiveStrategy(), total_steps=500, total_prob=0.4, imbalance=0.9, seed=42, use_gui=True)

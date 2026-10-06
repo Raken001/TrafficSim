@@ -3,7 +3,7 @@ from strategies import FixedTimeStrategy, AdaptiveStrategy
 from analyze_metrics import generate_research_plots
 from process_data import ResultsProcessor
 
-PLOT_INDIVIDUAL_RUNS = False
+PLOT_INDIVIDUAL_RUNS = True
 
 def run_experiments():
     imbalances = [0.5, 0.7, 0.9]
