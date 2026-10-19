@@ -59,8 +59,13 @@ def generate_research_plots(strategy: str = "fixed", imbalance: float = 0.5, see
     axes[2].legend()
     axes[2].grid(True, linestyle='--', alpha=0.7)
     
-    # Dynamic filename formatting
-    output_file = f"results_{strategy}_imb{imbalance}_seed{seed}.png"
+    # Dynamic directory and filename formatting: plots / <batch_id> / <strategy>
+    output_base_dir = "plots"
+    batch_folder = batch_id if batch_id else "manual_runs"
+    target_dir = os.path.join(output_base_dir, batch_folder, strategy)
+    os.makedirs(target_dir, exist_ok=True)
+
+    output_file = os.path.join(target_dir, f"imb{imbalance}_seed{seed}.png")
     plt.tight_layout()
     plt.savefig(output_file, dpi=300)
     plt.close()  # Closes the figure to prevent memory exhaustion in loops
