@@ -248,9 +248,10 @@ class ResultsProcessor:
     # ------------------------------------------------------------------ #
     # Persistence
     # ------------------------------------------------------------------ #
-    def save_results(self, runs: pd.DataFrame, conditions: pd.DataFrame, comparison: pd.DataFrame) -> None:
-        """Writes derived tables to SQLite (replacing old versions) and to CSV in results/."""
-        os.makedirs(self.results_dir, exist_ok=True)
+    def save_results(self, runs: pd.DataFrame, conditions: pd.DataFrame, comparison: pd.DataFrame, batch_id: str = None) -> str:
+        """Writes derived tables to SQLite and to CSV in results/<batch_id>/."""
+        target_dir = os.path.join(self.results_dir, batch_id) if batch_id else self.results_dir
+        os.makedirs(target_dir, exist_ok=True)
         tables = {
             "run_summary": runs,
             "condition_summary": conditions,
@@ -260,9 +261,10 @@ class ResultsProcessor:
             for name, df in tables.items():
                 # Derived data is fully recomputed each time, so replacing is idempotent
                 df.to_sql(name, conn, if_exists="replace", index=False)
-                df.to_csv(os.path.join(self.results_dir, f"{name}.csv"), index=False)
+                df.to_csv(os.path.join(target_dir, f"{name}.csv"), index=False)
         print(f"Saved run_summary ({len(runs)} rows), condition_summary ({len(conditions)} rows), "
-              f"paired_comparison ({len(comparison)} rows) to {self.db_file} and {self.results_dir}/")
+              f"paired_comparison ({len(comparison)} rows) to {self.db_file} and {target_dir}/")
+        return target_dir
 
     # ------------------------------------------------------------------ #
     # Reporting
@@ -302,13 +304,13 @@ class ResultsProcessor:
         conditions = self.summarize_conditions(runs)
         comparison = self.compare_strategies(runs)
 
-        self.save_results(runs, conditions, comparison)
+        target_dir = self.save_results(runs, conditions, comparison, batch_id=batch_id)
         self.print_headline(comparison)
 
         if make_plots:
             # Imported here so the processing layer has no hard dependency on matplotlib
             from analyze_metrics import generate_comparison_plots
-            generate_comparison_plots(conditions, self.results_dir)
+            generate_comparison_plots(conditions, target_dir)
 
         return {"runs": runs, "conditions": conditions, "comparison": comparison}
 
