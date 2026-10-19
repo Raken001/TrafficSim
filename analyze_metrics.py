@@ -76,8 +76,9 @@ def generate_research_plots(strategy: str = "fixed", imbalance: float = 0.5, see
 # Aggregate (cross-seed) comparison plots
 # ---------------------------------------------------------------------- #
 STRATEGY_STYLE = {
-    "fixed_time": {"label": "Fixed-Time", "color": "#64748b"},
-    "adaptive":   {"label": "Adaptive",   "color": "#2563eb"},
+    "fixed_time":     {"label": "Fixed-Time",               "color": "#64748b"},
+    "adaptive":       {"label": "Adaptive (15/60s)",        "color": "#2563eb"},
+    "adaptive_tuned": {"label": "Adaptive Tuned (10/45s)",  "color": "#059669"},
 }
 IMBALANCE_LABELS = {0.5: "50/50", 0.7: "70/30", 0.9: "90/10"}
 
@@ -93,7 +94,7 @@ def _grouped_bars(ax, conditions: pd.DataFrame, metric: str, series: list, title
     """
     imbalances = sorted(conditions["imbalance"].unique())
     x = np.arange(len(imbalances))
-    width = 0.8 / len(series)
+    width = 0.8 / max(len(series), 1)
 
     for i, (strategy, metric_name, label, color, hatch) in enumerate(series):
         subset = (conditions[(conditions["strategy"] == strategy) & (conditions["metric"] == metric_name)]
@@ -112,8 +113,13 @@ def _grouped_bars(ax, conditions: pd.DataFrame, metric: str, series: list, title
     ax.legend(fontsize=8)
 
 
-def _strategy_series(metric: str):
-    return [(s, metric, style["label"], style["color"], None) for s, style in STRATEGY_STYLE.items()]
+def _strategy_series(metric: str, conditions: pd.DataFrame = None):
+    if conditions is not None and not conditions.empty:
+        present = set(conditions["strategy"].unique())
+        styles = {s: st for s, st in STRATEGY_STYLE.items() if s in present}
+    else:
+        styles = STRATEGY_STYLE
+    return [(s, metric, style["label"], style["color"], None) for s, style in styles.items()]
 
 
 def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "results") -> None:
@@ -129,6 +135,9 @@ def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "resul
         return
     os.makedirs(output_dir, exist_ok=True)
     n_seeds = int(conditions["n"].max())
+    active_strategies = {s: st for s, st in STRATEGY_STYLE.items() if s in conditions["strategy"].unique()}
+    if not active_strategies:
+        active_strategies = STRATEGY_STYLE
 
     # --- Figure 1: overall efficiency ---
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
@@ -139,8 +148,8 @@ def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "resul
         ("throughput", "Intersection Throughput", "Vehicles completed"),
     ]
     for ax, (metric, title, ylabel) in zip(axes.flat, panels):
-        _grouped_bars(ax, conditions, metric, _strategy_series(metric), title, ylabel)
-    fig.suptitle(f"Fixed-Time vs. Adaptive Control: Efficiency (mean ± 95% CI, n={n_seeds} seeds)", fontsize=13)
+        _grouped_bars(ax, conditions, metric, _strategy_series(metric, conditions), title, ylabel)
+    fig.suptitle(f"Traffic Control Efficiency Comparison (mean ± 95% CI, n={n_seeds} seeds)", fontsize=13)
     fig.tight_layout()
     efficiency_file = os.path.join(output_dir, "comparison_efficiency.png")
     fig.savefig(efficiency_file, dpi=300)
@@ -151,7 +160,7 @@ def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "resul
     axes_flat = axes.flat
     axis_series = lambda metric_suffix: [
         (s, f"{axis}_{metric_suffix}", f"{style['label']} - {axis.upper()}", style["color"], hatch)
-        for s, style in STRATEGY_STYLE.items()
+        for s, style in active_strategies.items()
         for axis, hatch in (("ns", None), ("ew", "//"))
     ]
     _grouped_bars(axes_flat[0], conditions, "ns_avg_delay", axis_series("avg_delay"),
@@ -160,7 +169,7 @@ def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "resul
                   "Worst-Case Wait by Direction", "Max individual waiting time (s)")
     _grouped_bars(axes_flat[2], conditions, "ns_p95_wait", axis_series("p95_wait"),
                   "95th Percentile Wait by Direction", "95th percentile waiting time (s)")
-    _grouped_bars(axes_flat[3], conditions, "ew_ns_delay_ratio", _strategy_series("ew_ns_delay_ratio"),
+    _grouped_bars(axes_flat[3], conditions, "ew_ns_delay_ratio", _strategy_series("ew_ns_delay_ratio", conditions),
                   "Minor/Major Delay Ratio (EW / NS)", "Ratio (1.0 = equal delay)")
     axes_flat[3].axhline(1.0, color="black", linestyle=":", linewidth=1)
     fig.suptitle(f"Directional Fairness (mean ± 95% CI, n={n_seeds} seeds). NS is the major axis when split > 50/50",

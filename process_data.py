@@ -28,9 +28,9 @@ RESULTS_DIR = "results"
 
 # Only these strategy labels are part of the experiment. Older development rows
 # (e.g. strategy="fixed") are ignored rather than deleted.
-VALID_STRATEGIES = ("fixed_time", "adaptive")
+VALID_STRATEGIES = ("fixed_time", "adaptive", "adaptive_tuned")
 BASELINE_STRATEGY = "fixed_time"
-TREATMENT_STRATEGY = "adaptive"
+TREATMENT_STRATEGIES = ("adaptive", "adaptive_tuned")
 
 RUN_KEYS = ["strategy", "imbalance", "seed"]
 
@@ -214,35 +214,39 @@ class ResultsProcessor:
         for imbalance, group in runs.groupby("imbalance"):
             for metric in metric_cols:
                 paired = group.pivot(index="seed", columns="strategy", values=metric)
-                if BASELINE_STRATEGY not in paired or TREATMENT_STRATEGY not in paired:
+                if BASELINE_STRATEGY not in paired:
                     continue
-                paired = paired[[BASELINE_STRATEGY, TREATMENT_STRATEGY]].dropna()
-                if paired.empty:
-                    continue
+                for treatment in TREATMENT_STRATEGIES:
+                    if treatment not in paired:
+                        continue
+                    pair_data = paired[[BASELINE_STRATEGY, treatment]].dropna()
+                    if pair_data.empty:
+                        continue
 
-                fixed = paired[BASELINE_STRATEGY]
-                adaptive = paired[TREATMENT_STRATEGY]
-                diff = adaptive - fixed
-                fixed_mean = fixed.mean()
+                    fixed = pair_data[BASELINE_STRATEGY]
+                    treat = pair_data[treatment]
+                    diff = treat - fixed
+                    fixed_mean = fixed.mean()
 
-                if len(paired) > 1 and diff.std() > 0:
-                    t_stat, p_value = stats.ttest_rel(adaptive, fixed)
-                else:
-                    t_stat, p_value = np.nan, np.nan  # identical pairs: test undefined
+                    if len(pair_data) > 1 and diff.std() > 0:
+                        t_stat, p_value = stats.ttest_rel(treat, fixed)
+                    else:
+                        t_stat, p_value = np.nan, np.nan
 
-                rows.append({
-                    "imbalance": imbalance,
-                    "metric": metric,
-                    "label": METRICS[metric],
-                    "n_pairs": len(paired),
-                    "fixed_mean": fixed_mean,
-                    "adaptive_mean": adaptive.mean(),
-                    "mean_diff": diff.mean(),
-                    "pct_change": (diff.mean() / fixed_mean * 100) if fixed_mean != 0 else np.nan,
-                    "t_stat": t_stat,
-                    "p_value": p_value,
-                    "significant": bool(p_value < 0.05) if not np.isnan(p_value) else False,
-                })
+                    rows.append({
+                        "imbalance": imbalance,
+                        "treatment": treatment,
+                        "metric": metric,
+                        "label": METRICS[metric],
+                        "n_pairs": len(pair_data),
+                        "fixed_mean": fixed_mean,
+                        "adaptive_mean": treat.mean(),
+                        "mean_diff": diff.mean(),
+                        "pct_change": (diff.mean() / fixed_mean * 100) if fixed_mean != 0 else np.nan,
+                        "t_stat": t_stat,
+                        "p_value": p_value,
+                        "significant": bool(p_value < 0.05) if not np.isnan(p_value) else False,
+                    })
         return pd.DataFrame(rows)
 
     # ------------------------------------------------------------------ #
@@ -278,9 +282,10 @@ class ResultsProcessor:
         if view.empty:
             return
         view["metric"] = pd.Categorical(view["metric"], categories=key_metrics, ordered=True)
-        view = view.sort_values(["imbalance", "metric"])
-        cols = ["imbalance", "metric", "fixed_mean", "adaptive_mean", "pct_change", "p_value"]
-        print("\n=== Adaptive vs. Fixed-Time (paired by seed) ===")
+        sort_cols = ["imbalance", "treatment", "metric"] if "treatment" in view.columns else ["imbalance", "metric"]
+        view = view.sort_values(sort_cols)
+        cols = ["imbalance", "treatment", "metric", "fixed_mean", "adaptive_mean", "pct_change", "p_value"] if "treatment" in view.columns else ["imbalance", "metric", "fixed_mean", "adaptive_mean", "pct_change", "p_value"]
+        print("\n=== Paired Comparisons vs. Fixed-Time (paired by seed) ===")
         print(view[cols].to_string(index=False, float_format=lambda x: f"{x:,.3f}"))
 
     # ------------------------------------------------------------------ #

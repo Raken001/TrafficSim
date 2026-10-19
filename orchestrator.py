@@ -10,7 +10,11 @@ PLOT_INDIVIDUAL_RUNS = True
 def run_experiments():
     imbalances = [0.5, 0.7, 0.9]
     seeds = [42, 105, 256, 789, 1024, 1337, 2048, 9999]
-    strategies = [FixedTimeStrategy(), AdaptiveStrategy()]
+    strategies = [
+        FixedTimeStrategy(),
+        AdaptiveStrategy(min_green=15, max_green=60, name="adaptive"),
+        AdaptiveStrategy(min_green=10, max_green=45, name="adaptive_tuned"),
+    ]
 
     # All runs in this orchestrator invocation share a single batch_id.
     # This groups them in the database and allows process_data.py to
