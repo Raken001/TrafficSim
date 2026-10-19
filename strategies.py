@@ -79,24 +79,27 @@ class FixedTimeStrategy(SignalStrategy):
 
 
 class AdaptiveStrategy(SignalStrategy):
-    """Threshold-based adaptive signal control with anti-starvation guards.
+    """Threshold-based adaptive signal control with queue and delay actuation.
     
     During a green phase the controller follows this state machine:
         1. HOLD for min_green steps (prevents rapid phase flickering)
-        2. After min_green, CHECK if the opposing approach's combined queue
-           exceeds queue_threshold → switch to yellow clearance
-        3. At max_green, FORCE switch to yellow regardless of queues
-           (anti-starvation: guarantees the minor approach gets served)
+        2. After min_green, CHECK if either:
+           - Opposing approach combined queue >= queue_threshold (spatial congestion)
+           - Opposing approach combined waiting time >= wait_threshold (temporal delay;
+             allows lone minor-road vehicles to trigger service)
+           → switch to yellow clearance
+        3. At max_green, FORCE switch to yellow regardless of traffic demand
+           (anti-starvation: guarantees minor approaches get served)
     
     Yellow phases always run for their full duration before advancing
     to the next green phase.
     
-    All threshold values are parameterized so they can be updated with
-    literature-backed values after a formal review.
+    All threshold values are parameterized so they can be configured or tuned.
     """
 
     def __init__(self, min_green: int = 15, max_green: int = 60,
-                 yellow: int = 3, queue_threshold: int = 5):
+                 yellow: int = 3, queue_threshold: int = 5,
+                 wait_threshold: float = 30.0, name: str = "adaptive"):
         """
         Args:
             min_green:       Minimum green duration (steps) before a switch
@@ -106,25 +109,30 @@ class AdaptiveStrategy(SignalStrategy):
             yellow:          Mandatory yellow clearance duration (steps).
             queue_threshold: Number of halting vehicles on the opposing
                              approach that triggers an early phase switch.
+            wait_threshold:  Accumulated waiting time (vehicle-seconds) on the
+                             opposing approach that triggers an early switch.
+            name:            Identifier string used in database logging.
         """
         self.min_green = min_green
         self.max_green = max_green
         self.yellow = yellow
         self.queue_threshold = queue_threshold
+        self.wait_threshold = wait_threshold
+        self._name = name
 
     @property
     def name(self) -> str:
-        return "adaptive"
+        return self._name
 
     def determine_phase(self, current_phase: int, time_in_phase: int,
                         queue_data: dict, delay_data: dict) -> int:
         """Applies threshold-based actuation with min/max green guards.
         
         Green phase logic (phase 0 or 2):
-            - time_in_phase < min_green  →  hold (no switching allowed)
-            - time_in_phase >= max_green →  force switch to yellow
-            - opposing queue >= threshold →  switch to yellow
-            - otherwise                  →  extend current green
+            - time_in_phase < min_green             →  hold (no switching allowed)
+            - time_in_phase >= max_green            →  force switch to yellow
+            - opposing queue or wait >= threshold   →  switch to yellow
+            - otherwise                             →  extend current green
         
         Yellow phase logic (phase 1 or 3):
             - Always runs for full yellow duration, then advances.
@@ -135,23 +143,29 @@ class AdaptiveStrategy(SignalStrategy):
                 return (current_phase + 1) % 4
             return current_phase
 
-        # --- Green phases: min → threshold → max state machine ---
-        # Determine the combined queue on the opposing (currently red) approach
-        if current_phase == 0:  # NS green → check EW queue
+        # --- Green phases: min → triggers → max state machine ---
+        # Determine the combined queue and accumulated waiting time on the opposing approach
+        if current_phase == 0:  # NS green → check EW opposing demand
             opposing_queue = queue_data.get("east", 0) + queue_data.get("west", 0)
-        else:                   # EW green (phase 2) → check NS queue
+            opposing_wait = delay_data.get("east", 0.0) + delay_data.get("west", 0.0)
+        else:                   # EW green (phase 2) → check NS opposing demand
             opposing_queue = queue_data.get("north", 0) + queue_data.get("south", 0)
+            opposing_wait = delay_data.get("north", 0.0) + delay_data.get("south", 0.0)
 
         # 1. Minimum green: hold regardless of opposing demand
         if time_in_phase < self.min_green:
             return current_phase
 
-        # 2. Maximum green: force switch to yellow (anti-starvation)
+        # 2. Maximum green: force switch to yellow (failsafe anti-starvation)
         if time_in_phase >= self.max_green:
             return current_phase + 1  # 0→1 or 2→3
 
-        # 3. Threshold check: switch if opposing approach is congested
-        if opposing_queue >= self.queue_threshold:
+        # 3. Dual actuation triggers:
+        # Volume threshold (spatial) OR accumulated waiting time (temporal delay)
+        queue_triggered = (self.queue_threshold is not None) and (opposing_queue >= self.queue_threshold)
+        wait_triggered = (self.wait_threshold is not None) and (opposing_wait >= self.wait_threshold)
+
+        if queue_triggered or wait_triggered:
             return current_phase + 1  # 0→1 or 2→3
 
         # 4. No trigger: extend current green
