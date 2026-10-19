@@ -45,6 +45,9 @@ METRICS = {
     "max_wait":          "Max individual wait (s)",
     "ns_max_wait":       "NS max individual wait (s)",
     "ew_max_wait":       "EW max individual wait (s)",
+    "p95_wait":          "95th percentile wait (s)",
+    "ns_p95_wait":       "NS 95th percentile wait (s)",
+    "ew_p95_wait":       "EW 95th percentile wait (s)",
     "mean_queue":        "Mean queue length (vehicles)",
     "max_queue":         "Max queue length (vehicles)",
     "throughput":        "Throughput (vehicles)",
@@ -140,6 +143,7 @@ class ResultsProcessor:
             avg_delay=("time_loss", "mean"),
             avg_waiting_time=("waiting_time", "mean"),
             max_wait=("waiting_time", "max"),
+            p95_wait=("waiting_time", lambda w: float(w.quantile(0.95)) if len(w) > 0 else np.nan),
         ).reset_index()
 
         # --- Vehicle-level metrics per axis (directional fairness) ---
@@ -147,7 +151,8 @@ class ResultsProcessor:
         # we groupby axis and aggregate, then unstack the axis.
         axis_summary = trips.groupby(RUN_KEYS + ["axis"]).agg(
             avg_delay=("time_loss", "mean"),
-            max_wait=("waiting_time", "max")
+            max_wait=("waiting_time", "max"),
+            p95_wait=("waiting_time", lambda w: float(w.quantile(0.95)) if len(w) > 0 else np.nan),
         ).unstack("axis")
         
         # Flatten multi-level columns (e.g., 'avg_delay', 'EW' -> 'ew_avg_delay')
@@ -266,7 +271,7 @@ class ResultsProcessor:
     def print_headline(comparison: pd.DataFrame) -> None:
         """Prints a compact console table of the key comparison metrics."""
         key_metrics = ["avg_delay", "ns_avg_delay", "ew_avg_delay", "ew_ns_delay_ratio",
-                       "max_wait", "max_queue", "throughput"]
+                       "max_wait", "ew_p95_wait", "max_queue", "throughput"]
         view = comparison[comparison["metric"].isin(key_metrics)].copy()
         if view.empty:
             return

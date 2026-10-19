@@ -147,19 +147,22 @@ def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "resul
     plt.close(fig)
 
     # --- Figure 2: directional fairness ---
-    fig, axes = plt.subplots(1, 3, figsize=(17, 5.5))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes_flat = axes.flat
     axis_series = lambda metric_suffix: [
         (s, f"{axis}_{metric_suffix}", f"{style['label']} - {axis.upper()}", style["color"], hatch)
         for s, style in STRATEGY_STYLE.items()
         for axis, hatch in (("ns", None), ("ew", "//"))
     ]
-    _grouped_bars(axes[0], conditions, "ns_avg_delay", axis_series("avg_delay"),
+    _grouped_bars(axes_flat[0], conditions, "ns_avg_delay", axis_series("avg_delay"),
                   "Average Delay by Direction", "Time loss per vehicle (s)")
-    _grouped_bars(axes[1], conditions, "ns_max_wait", axis_series("max_wait"),
+    _grouped_bars(axes_flat[1], conditions, "ns_max_wait", axis_series("max_wait"),
                   "Worst-Case Wait by Direction", "Max individual waiting time (s)")
-    _grouped_bars(axes[2], conditions, "ew_ns_delay_ratio", _strategy_series("ew_ns_delay_ratio"),
+    _grouped_bars(axes_flat[2], conditions, "ns_p95_wait", axis_series("p95_wait"),
+                  "95th Percentile Wait by Direction", "95th percentile waiting time (s)")
+    _grouped_bars(axes_flat[3], conditions, "ew_ns_delay_ratio", _strategy_series("ew_ns_delay_ratio"),
                   "Minor/Major Delay Ratio (EW / NS)", "Ratio (1.0 = equal delay)")
-    axes[2].axhline(1.0, color="black", linestyle=":", linewidth=1)
+    axes_flat[3].axhline(1.0, color="black", linestyle=":", linewidth=1)
     fig.suptitle(f"Directional Fairness (mean ± 95% CI, n={n_seeds} seeds). NS is the major axis when split > 50/50",
                  fontsize=13)
     fig.tight_layout()
