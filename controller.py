@@ -16,6 +16,20 @@ FLOW_DIRECTIONS = {
     "flow_EW": ("east", "EW"),
 }
 
+def _ensure_table_columns(conn: sqlite3.Connection, table_name: str, df: pd.DataFrame) -> None:
+    """Ensures all columns in df exist in SQLite table_name, adding missing columns dynamically."""
+    try:
+        cursor = conn.cursor()
+        existing_cols = {row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        if not existing_cols:
+            return  # Table does not exist yet; to_sql will create it with all columns
+        for col in df.columns:
+            if col not in existing_cols:
+                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col} TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
 class TrafficExperiment:
     """Manages a SUMO traffic simulation experiment via TraCI.
     
@@ -192,6 +206,7 @@ class TrafficExperiment:
         df['run_at'] = run_at
         
         conn = sqlite3.connect("research_data.db")
+        _ensure_table_columns(conn, "simulation_metrics", df)
         df.to_sql("simulation_metrics", conn, if_exists="append", index=False)
         # Performance indexes for filtering by batch or by run
         conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_batch ON simulation_metrics(batch_id)")
@@ -254,6 +269,7 @@ class TrafficExperiment:
         df['run_at'] = run_at
 
         conn = sqlite3.connect("research_data.db")
+        _ensure_table_columns(conn, "vehicle_trips", df)
         df.to_sql("vehicle_trips", conn, if_exists="append", index=False)
         # Performance indexes for filtering by batch or by run
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trips_batch ON vehicle_trips(batch_id)")

@@ -6,4 +6,4 @@ traffic.rou.xml
 __pycache__/
 .vscode/
 results/
-
+output/
