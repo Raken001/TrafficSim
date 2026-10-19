@@ -56,32 +56,58 @@ METRICS = {
 class ResultsProcessor:
     """Turns raw per-step and per-vehicle simulation data into research statistics."""
 
-    def __init__(self, db_file: str = DB_FILE, results_dir: str = RESULTS_DIR):
+    def __init__(self, db_file: str = DB_FILE, results_dir: str = RESULTS_DIR, batch_id: str = None):
         """
         :param db_file: Path to the SQLite database produced by controller.py
         :param results_dir: Directory where CSV summaries and figures are written
+        :param batch_id: If given, only process data from this batch. If None,
+                         auto-detects the latest batch_id in the database.
         """
         self.db_file = db_file
         self.results_dir = results_dir
+        self.batch_id = batch_id
 
     # ------------------------------------------------------------------ #
     # Loading
     # ------------------------------------------------------------------ #
-    def _read_table(self, table: str) -> pd.DataFrame:
-        """Reads rows for the experiment strategies only. Returns empty frame if table is missing."""
-        placeholders = ",".join("?" for _ in VALID_STRATEGIES)
-        query = f"SELECT * FROM {table} WHERE strategy IN ({placeholders})"
+    def _resolve_batch_id(self) -> str | None:
+        """Auto-detects the latest batch_id if none was explicitly provided."""
+        if self.batch_id:
+            return self.batch_id
         with sqlite3.connect(self.db_file) as conn:
             try:
-                return pd.read_sql_query(query, conn, params=VALID_STRATEGIES)
+                result = conn.execute("SELECT MAX(batch_id) FROM simulation_metrics").fetchone()
+                batch_id = result[0] if result and result[0] else None
+                if batch_id:
+                    print(f"Auto-detected latest batch: {batch_id}")
+                return batch_id
+            except sqlite3.OperationalError:
+                return None
+
+    def _read_table(self, table: str, batch_id: str = None) -> pd.DataFrame:
+        """Reads rows for the experiment strategies, optionally filtered by batch_id.
+        
+        Returns empty frame if table is missing.
+        """
+        placeholders = ",".join("?" for _ in VALID_STRATEGIES)
+        query = f"SELECT * FROM {table} WHERE strategy IN ({placeholders})"
+        params = list(VALID_STRATEGIES)
+
+        if batch_id:
+            query += " AND batch_id = ?"
+            params.append(batch_id)
+
+        with sqlite3.connect(self.db_file) as conn:
+            try:
+                return pd.read_sql_query(query, conn, params=params)
             except pd.errors.DatabaseError:
                 return pd.DataFrame()
 
-    def load_step_metrics(self) -> pd.DataFrame:
-        return self._read_table("simulation_metrics")
+    def load_step_metrics(self, batch_id: str = None) -> pd.DataFrame:
+        return self._read_table("simulation_metrics", batch_id)
 
-    def load_vehicle_trips(self) -> pd.DataFrame:
-        return self._read_table("vehicle_trips")
+    def load_vehicle_trips(self, batch_id: str = None) -> pd.DataFrame:
+        return self._read_table("vehicle_trips", batch_id)
 
     # ------------------------------------------------------------------ #
     # Stage 1: one row per run
@@ -255,11 +281,17 @@ class ResultsProcessor:
     # ------------------------------------------------------------------ #
     def run(self, make_plots: bool = True) -> dict:
         """Executes the full processing pipeline and returns the derived DataFrames."""
-        steps = self.load_step_metrics()
+        batch_id = self._resolve_batch_id()
+        if batch_id:
+            print(f"Processing batch: {batch_id}")
+        else:
+            print("Processing all batches (no batch_id filter).")
+
+        steps = self.load_step_metrics(batch_id)
         if steps.empty:
             print(f"No simulation data found in {self.db_file}. Run orchestrator.py first.")
             return {}
-        trips = self.load_vehicle_trips()
+        trips = self.load_vehicle_trips(batch_id)
 
         runs = self.summarize_runs(steps, trips)
         conditions = self.summarize_conditions(runs)

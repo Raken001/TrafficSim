@@ -2,6 +2,7 @@ import traci
 import time
 import os
 import xml.etree.ElementTree as ET
+from datetime import datetime
 import pandas as pd
 import sqlite3
 from strategies import AdaptiveStrategy, SignalStrategy, FixedTimeStrategy
@@ -80,7 +81,7 @@ class TrafficExperiment:
             ]
         traci.start(sumo_cmd)
 
-    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42, use_gui: bool = False) -> None:
+    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42, use_gui: bool = False, batch_id: str = None) -> None:
         """Executes the simulation loop for a specified number of steps and collect metrics.
         
         :param warmup_steps: Number of initial steps to run without recording metrics,
@@ -163,13 +164,22 @@ class TrafficExperiment:
             except Exception:
                 pass
             
-            # Pass the metadata to the database export
-            self.export_data(strategy.name, imbalance, seed)
-            # SUMO only finishes writing tripinfo once TraCI is closed, so this must come after close()
-            self.export_trip_data(tripinfo_file, strategy.name, imbalance, seed, warmup_time=float(warmup_steps))
+            # Only export to database when run as part of an orchestrated research batch.
+            # Manual runs from controller.py __main__ (batch_id=None) skip export entirely.
+            if batch_id:
+                run_at = datetime.now().isoformat()
+                self.export_data(strategy.name, imbalance, seed, batch_id, run_at)
+                # SUMO only finishes writing tripinfo once TraCI is closed, so this must come after close()
+                self.export_trip_data(tripinfo_file, strategy.name, imbalance, seed, batch_id, run_at, warmup_time=float(warmup_steps))
+            else:
+                print("Manual run (no batch_id). Skipping database export.")
 
-    def export_data(self, strategy: str, imbalance: float, seed: int) -> None:
-        """Appends recorded simulation metrics and metadata into SQLite database (idempotently)."""
+    def export_data(self, strategy: str, imbalance: float, seed: int, batch_id: str, run_at: str) -> None:
+        """Appends recorded simulation metrics into SQLite database with batch tracking.
+        
+        Each orchestrator run produces a unique batch_id, so no data is ever deleted.
+        Historical batches accumulate for cross-batch statistical analysis.
+        """
         if not self.metrics:
             print("No metrics collected to export.")
             return
@@ -178,28 +188,19 @@ class TrafficExperiment:
         df['strategy'] = strategy
         df['imbalance'] = imbalance
         df['seed'] = seed
+        df['batch_id'] = batch_id
+        df['run_at'] = run_at
         
         conn = sqlite3.connect("research_data.db")
-        cursor = conn.cursor()
-        
-        # Make the insertion idempotent by clearing out old data for this specific run
-        try:
-            cursor.execute(
-                "DELETE FROM simulation_metrics WHERE strategy=? AND imbalance=? AND seed=?", 
-                (strategy, imbalance, seed)
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            # Safely ignore the error if this is the very first run and the table does not exist yet
-            pass
-            
-        # Append the fresh simulation data to SQLite database
         df.to_sql("simulation_metrics", conn, if_exists="append", index=False)
+        # Performance indexes for filtering by batch or by run
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_batch ON simulation_metrics(batch_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_run ON simulation_metrics(strategy, imbalance, seed)")
         conn.close()
-        print("Experiment complete. Metrics exported to SQLite database (research_data.db).")
+        print(f"Metrics exported to research_data.db (batch: {batch_id}).")
 
-    def export_trip_data(self, tripinfo_file: str, strategy: str, imbalance: float, seed: int, warmup_time: float = 100.0) -> None:
-        """Parses SUMO's per-vehicle tripinfo XML into the vehicle_trips table (idempotently).
+    def export_trip_data(self, tripinfo_file: str, strategy: str, imbalance: float, seed: int, batch_id: str, run_at: str, warmup_time: float = 100.0) -> None:
+        """Parses SUMO's per-vehicle tripinfo XML into the vehicle_trips table with batch tracking.
         
         Each row is one vehicle. Vehicles still in the network when the simulation
         ended are kept and flagged with finished=0 (SUMO writes arrival=-1 for them).
@@ -249,23 +250,18 @@ class TrafficExperiment:
         df['strategy'] = strategy
         df['imbalance'] = imbalance
         df['seed'] = seed
+        df['batch_id'] = batch_id
+        df['run_at'] = run_at
 
         conn = sqlite3.connect("research_data.db")
-        cursor = conn.cursor()
-        try:
-            cursor.execute(
-                "DELETE FROM vehicle_trips WHERE strategy=? AND imbalance=? AND seed=?",
-                (strategy, imbalance, seed)
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            # Table does not exist yet on the very first run
-            pass
         df.to_sql("vehicle_trips", conn, if_exists="append", index=False)
+        # Performance indexes for filtering by batch or by run
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trips_batch ON vehicle_trips(batch_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trips_run ON vehicle_trips(strategy, imbalance, seed)")
         conn.close()
 
         os.remove(tripinfo_file)
-        print(f"Exported {len(df)} vehicle trips ({int(df['finished'].sum())} finished) to vehicle_trips.")
+        print(f"Exported {len(df)} vehicle trips ({int(df['finished'].sum())} finished) to vehicle_trips (batch: {batch_id}).")
 
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")

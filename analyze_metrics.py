@@ -4,16 +4,27 @@ import matplotlib.pyplot as plt
 import sqlite3
 import os
 
-def generate_research_plots(strategy: str = "fixed", imbalance: float = 0.5, seed: int = 42, db_file: str = "research_data.db"):
+def generate_research_plots(strategy: str = "fixed", imbalance: float = 0.5, seed: int = 42, db_file: str = "research_data.db", batch_id: str = None):
     """Reads simulation metrics from SQLite database and generates visualizations for research analysis."""
     
     if not os.path.exists(db_file):
         print(f"Error: Database file '{db_file}' not found. Please run controller.py first.")
         return
 
-    # Query the database for this specific run
+    # Query the database for this specific run (filtered by batch to avoid cross-batch duplicate steps)
     conn = sqlite3.connect(db_file)
-    query = f"SELECT * FROM simulation_metrics WHERE strategy='{strategy}' AND imbalance={imbalance} AND seed={seed}"
+    if batch_id:
+        query = f"SELECT * FROM simulation_metrics WHERE strategy='{strategy}' AND imbalance={imbalance} AND seed={seed} AND batch_id='{batch_id}'"
+    else:
+        try:
+            has_batch = conn.execute("SELECT 1 FROM simulation_metrics WHERE batch_id IS NOT NULL LIMIT 1").fetchone()
+            if has_batch:
+                query = f"SELECT * FROM simulation_metrics WHERE strategy='{strategy}' AND imbalance={imbalance} AND seed={seed} AND batch_id = (SELECT MAX(batch_id) FROM simulation_metrics)"
+            else:
+                query = f"SELECT * FROM simulation_metrics WHERE strategy='{strategy}' AND imbalance={imbalance} AND seed={seed}"
+        except Exception:
+            query = f"SELECT * FROM simulation_metrics WHERE strategy='{strategy}' AND imbalance={imbalance} AND seed={seed}"
+
     df = pd.read_sql_query(query, conn)
     conn.close()
 
