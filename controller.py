@@ -95,13 +95,25 @@ class TrafficExperiment:
             ]
         traci.start(sumo_cmd)
 
-    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42, use_gui: bool = False, batch_id: str = None) -> None:
+    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42, use_gui: bool = False, batch_id: str = None) -> dict | None:
         """Executes the simulation loop for a specified number of steps and collect metrics.
         
         :param warmup_steps: Number of initial steps to run without recording metrics,
                              allowing the network to fill with a steady state of traffic.
         :param use_gui: Whether to run with the GUI and sleep delay.
+        :returns: Dict with 'metrics_df' and 'trips_df' DataFrames when batch_id is set,
+                  None for manual runs (no batch_id).
         """
+        # Per-run file isolation: each parallel worker gets a unique route file
+        # to prevent race conditions when multiple SUMO instances run concurrently.
+        route_file_unique = None
+        if batch_id:
+            os.makedirs("output", exist_ok=True)
+            route_file_unique = os.path.join(
+                "output", f"routes_{strategy.name}_imb{imbalance}_seed{seed}.rou.xml"
+            )
+            self.route_file = route_file_unique
+
         self.generate_route_file(total_steps, total_prob, imbalance)
         
         # Unique per-run file so parallel runs (Progress Report 3) never collide
@@ -128,6 +140,7 @@ class TrafficExperiment:
         traci.trafficlight.setPhase(tls_id, current_phase)
         traci.trafficlight.setPhaseDuration(tls_id, 99999)
         
+        result = None
         try: 
             while step < total_steps:
                 traci.simulationStep()
@@ -177,16 +190,105 @@ class TrafficExperiment:
                 print("TraCI server was already closed.")
             except Exception:
                 pass
-            
-            # Only export to database when run as part of an orchestrated research batch.
-            # Manual runs from controller.py __main__ (batch_id=None) skip export entirely.
+
+            # Build DataFrames for the master process to bulk-insert.
+            # Workers never open a database connection — all writes are
+            # centralized in bulk_insert_results() to avoid SQLite lock contention.
             if batch_id:
                 run_at = datetime.now().isoformat()
-                self.export_data(strategy.name, imbalance, seed, batch_id, run_at)
-                # SUMO only finishes writing tripinfo once TraCI is closed, so this must come after close()
-                self.export_trip_data(tripinfo_file, strategy.name, imbalance, seed, batch_id, run_at, warmup_time=float(warmup_steps))
+                result = {
+                    "metrics_df": self._build_metrics_df(
+                        strategy.name, imbalance, seed, batch_id, run_at
+                    ),
+                    # SUMO only finishes writing tripinfo once TraCI is closed,
+                    # so this must come after traci.close().
+                    "trips_df": self._build_trips_df(
+                        tripinfo_file, strategy.name, imbalance, seed,
+                        batch_id, run_at, warmup_time=float(warmup_steps)
+                    ),
+                }
             else:
                 print("Manual run (no batch_id). Skipping database export.")
+
+            # Clean up per-run route file used for parallel isolation
+            if route_file_unique and os.path.exists(route_file_unique):
+                os.remove(route_file_unique)
+
+        return result
+
+    def _build_metrics_df(self, strategy_name: str, imbalance: float, seed: int,
+                          batch_id: str, run_at: str) -> pd.DataFrame | None:
+        """Constructs the simulation_metrics DataFrame without writing to the database.
+
+        Used by parallel workers to return data to the master process for
+        centralized bulk insertion via bulk_insert_results().
+        """
+        if not self.metrics:
+            print("No metrics collected.")
+            return None
+        df = pd.DataFrame(self.metrics)
+        df['strategy'] = strategy_name
+        df['imbalance'] = imbalance
+        df['seed'] = seed
+        df['batch_id'] = batch_id
+        df['run_at'] = run_at
+        return df
+
+    def _build_trips_df(self, tripinfo_file: str, strategy_name: str, imbalance: float,
+                        seed: int, batch_id: str, run_at: str,
+                        warmup_time: float = 100.0) -> pd.DataFrame | None:
+        """Parses SUMO tripinfo XML into a DataFrame without writing to the database.
+
+        Used by parallel workers to return data to the master process for
+        centralized bulk insertion. The temporary XML file is deleted after parsing.
+        """
+        if not os.path.exists(tripinfo_file):
+            print(f"No tripinfo file found at {tripinfo_file}; skipping trip build.")
+            return None
+
+        try:
+            root = ET.parse(tripinfo_file).getroot()
+        except ET.ParseError as e:
+            print(f"Could not parse {tripinfo_file}: {e}")
+            return None
+
+        rows = []
+        for trip in root.iter("tripinfo"):
+            depart = float(trip.get("depart"))
+            if depart < warmup_time:
+                continue
+
+            vehicle_id = trip.get("id")
+            flow_id = vehicle_id.split(".")[0]
+            origin, axis = FLOW_DIRECTIONS.get(flow_id, ("unknown", "unknown"))
+            arrival = float(trip.get("arrival"))
+            rows.append({
+                "vehicle_id": vehicle_id,
+                "origin": origin,
+                "axis": axis,
+                "depart": depart,
+                "arrival": arrival,
+                "finished": int(arrival >= 0),
+                "duration": float(trip.get("duration")),
+                "waiting_time": float(trip.get("waitingTime")),
+                "waiting_count": int(trip.get("waitingCount")),
+                "time_loss": float(trip.get("timeLoss")),
+                "depart_delay": float(trip.get("departDelay")),
+            })
+
+        if not rows:
+            print("Tripinfo file contained no vehicles; skipping trip build.")
+            return None
+
+        df = pd.DataFrame(rows)
+        df['strategy'] = strategy_name
+        df['imbalance'] = imbalance
+        df['seed'] = seed
+        df['batch_id'] = batch_id
+        df['run_at'] = run_at
+
+        os.remove(tripinfo_file)
+        return df
 
     def export_data(self, strategy: str, imbalance: float, seed: int, batch_id: str, run_at: str) -> None:
         """Appends recorded simulation metrics into SQLite database with batch tracking.
@@ -278,6 +380,53 @@ class TrafficExperiment:
 
         os.remove(tripinfo_file)
         print(f"Exported {len(df)} vehicle trips ({int(df['finished'].sum())} finished) to vehicle_trips (batch: {batch_id}).")
+
+
+def bulk_insert_results(results: list, batch_id: str, db_file: str = "research_data.db") -> None:
+    """Concatenates all worker DataFrames and inserts in a single transaction.
+
+    Eliminates SQLite single-writer lock contention by collecting all data from
+    parallel workers and writing it through one connection in one transaction.
+    Indexes are created once after all inserts instead of per-run.
+
+    :param results: List of dicts from TrafficExperiment.run(), each containing
+                    'metrics_df' and 'trips_df' keys (or None for failed runs).
+    :param batch_id: Batch identifier for logging.
+    :param db_file: Path to the SQLite database.
+    """
+    valid = [r for r in results if r is not None]
+    if not valid:
+        print("No valid results to insert.")
+        return
+
+    metrics_frames = [r["metrics_df"] for r in valid if r.get("metrics_df") is not None]
+    trips_frames = [r["trips_df"] for r in valid if r.get("trips_df") is not None]
+
+    all_metrics = pd.concat(metrics_frames, ignore_index=True) if metrics_frames else pd.DataFrame()
+    all_trips = pd.concat(trips_frames, ignore_index=True) if trips_frames else pd.DataFrame()
+
+    conn = sqlite3.connect(db_file)
+    try:
+        if not all_metrics.empty:
+            _ensure_table_columns(conn, "simulation_metrics", all_metrics)
+            all_metrics.to_sql("simulation_metrics", conn, if_exists="append", index=False)
+
+        if not all_trips.empty:
+            _ensure_table_columns(conn, "vehicle_trips", all_trips)
+            all_trips.to_sql("vehicle_trips", conn, if_exists="append", index=False)
+
+        # Create indexes once (idempotent) — not per-run
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_batch ON simulation_metrics(batch_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_run ON simulation_metrics(strategy, imbalance, seed)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trips_batch ON vehicle_trips(batch_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trips_run ON vehicle_trips(strategy, imbalance, seed)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"Bulk insert complete: {len(all_metrics)} metric rows, {len(all_trips)} trip rows "
+          f"(batch: {batch_id})")
+
 
 if __name__ == "__main__":
     experiment = TrafficExperiment("baseline.net.xml", "traffic.rou.xml")
