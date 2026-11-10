@@ -17,6 +17,9 @@ from datetime import datetime
 from controller import TrafficExperiment, bulk_insert_results
 from strategies import FixedTimeStrategy, AdaptiveStrategy
 from process_data import ResultsProcessor
+from analyze_metrics import generate_research_plots
+
+PLOT_INDIVIDUAL_RUNS = True
 
 # ---------------------------------------------------------------------------
 # Strategy configurations (plain dicts for safe pickling across processes)
@@ -64,7 +67,11 @@ def _run_single_simulation(args: dict) -> dict | None:
 # ---------------------------------------------------------------------------
 def run_experiments():
     imbalances = [0.5, 0.7, 0.9]
-    seeds = list(range(42, 92))  # 50 seeds: 42 .. 91
+    # Includes all 8 original seeds from previous reports, plus 42 additional seeds
+    # for a total of 50 unique seeds (450 total simulation runs).
+    original_seeds = [42, 105, 256, 789, 1024, 1337, 2048, 9999]
+    additional_seeds = [s for s in range(1, 100) if s not in original_seeds][:42]
+    seeds = original_seeds + additional_seeds
     batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Build task list: one dict per simulation run
@@ -94,6 +101,14 @@ def run_experiments():
 
     # --- Centralized bulk insert (single connection, single transaction) ---
     bulk_insert_results(results, batch_id)
+
+    # --- Generate individual run plots for original seeds (if enabled) ---
+    if PLOT_INDIVIDUAL_RUNS:
+        print("\n--- Generating individual plots for original seeds ---")
+        for imb in imbalances:
+            for s in original_seeds:
+                for sc in STRATEGY_CONFIGS:
+                    generate_research_plots(sc["name"], imb, s, batch_id=batch_id)
 
     # --- Post-processing: aggregation, statistics, and comparison plots ---
     print("\n--- Running data processing pipeline ---")
