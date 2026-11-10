@@ -4,7 +4,13 @@ import matplotlib.pyplot as plt
 import sqlite3
 import os
 
-def generate_research_plots(strategy: str = "fixed", imbalance: float = 0.5, seed: int = 42, db_file: str = "research_data.db", batch_id: str = None):
+def generate_research_plots(
+    strategy: str = "fixed",
+    imbalance: float = 0.5,
+    seed: int = 42,
+    db_file: str = "research_data.db",
+    batch_id: str = None,
+):
     """Reads simulation metrics from SQLite database and generates visualizations for research analysis."""
     
     if not os.path.exists(db_file):
@@ -87,7 +93,14 @@ def _imbalance_label(value: float) -> str:
     return IMBALANCE_LABELS.get(round(value, 2), str(value))
 
 
-def _grouped_bars(ax, conditions: pd.DataFrame, metric: str, series: list, title: str, ylabel: str):
+def _grouped_bars(
+    ax,
+    conditions: pd.DataFrame,
+    metric: str,
+    series: list,
+    title: str,
+    ylabel: str,
+):
     """Draws grouped bars (x = imbalance) with 95% CI error bars.
     
     :param series: list of (strategy, metric_name, legend_label, color, hatch) tuples
@@ -122,7 +135,10 @@ def _strategy_series(metric: str, conditions: pd.DataFrame = None):
     return [(s, metric, style["label"], style["color"], None) for s, style in styles.items()]
 
 
-def generate_comparison_plots(conditions: pd.DataFrame, output_dir: str = "results") -> None:
+def generate_comparison_plots(
+    conditions: pd.DataFrame,
+    output_dir: str = "results",
+) -> None:
     """Generates cross-seed comparison figures from the condition_summary table.
     
     Bars show the mean across seeds; error bars show the 95% confidence interval.

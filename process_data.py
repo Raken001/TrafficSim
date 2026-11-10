@@ -59,7 +59,12 @@ METRICS = {
 class ResultsProcessor:
     """Turns raw per-step and per-vehicle simulation data into research statistics."""
 
-    def __init__(self, db_file: str = DB_FILE, results_dir: str = RESULTS_DIR, batch_id: str = None):
+    def __init__(
+        self,
+        db_file: str = DB_FILE,
+        results_dir: str = RESULTS_DIR,
+        batch_id: str = None,
+    ):
         """
         :param db_file: Path to the SQLite database produced by controller.py
         :param results_dir: Directory where CSV summaries and figures are written
@@ -252,7 +257,13 @@ class ResultsProcessor:
     # ------------------------------------------------------------------ #
     # Persistence
     # ------------------------------------------------------------------ #
-    def save_results(self, runs: pd.DataFrame, conditions: pd.DataFrame, comparison: pd.DataFrame, batch_id: str = None) -> str:
+    def save_results(
+        self,
+        runs: pd.DataFrame,
+        conditions: pd.DataFrame,
+        comparison: pd.DataFrame,
+        batch_id: str = None,
+    ) -> str:
         """Writes derived tables to SQLite and to CSV in results/<batch_id>/."""
         target_dir = os.path.join(self.results_dir, batch_id) if batch_id else self.results_dir
         os.makedirs(target_dir, exist_ok=True)

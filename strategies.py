@@ -23,8 +23,13 @@ class SignalStrategy(ABC):
         pass
 
     @abstractmethod
-    def determine_phase(self, current_phase: int, time_in_phase: int,
-                        queue_data: dict, delay_data: dict) -> int:
+    def determine_phase(
+        self,
+        current_phase: int,
+        time_in_phase: int,
+        queue_data: dict,
+        delay_data: dict,
+    ) -> int:
         """Determines which traffic light phase should be active.
         
         Args:
@@ -52,7 +57,12 @@ class FixedTimeStrategy(SignalStrategy):
     Default durations mirror the static tlLogic in baseline.net.xml (42/3/42/3).
     """
 
-    def __init__(self, ns_green: int = 42, ew_green: int = 42, yellow: int = 3):
+    def __init__(
+        self,
+        ns_green: int = 42,
+        ew_green: int = 42,
+        yellow: int = 3,
+    ):
         """
         Args:
             ns_green: Green phase duration (steps) for the North/South axis.
@@ -70,8 +80,13 @@ class FixedTimeStrategy(SignalStrategy):
     def name(self) -> str:
         return "fixed_time"
 
-    def determine_phase(self, current_phase: int, time_in_phase: int,
-                        queue_data: dict, delay_data: dict) -> int:
+    def determine_phase(
+        self,
+        current_phase: int,
+        time_in_phase: int,
+        queue_data: dict,
+        delay_data: dict,
+    ) -> int:
         """Advances to the next phase once the current phase's duration is reached."""
         if time_in_phase >= self.phase_durations[current_phase]:
             return (current_phase + 1) % 4
@@ -97,9 +112,15 @@ class AdaptiveStrategy(SignalStrategy):
     All threshold values are parameterized so they can be configured or tuned.
     """
 
-    def __init__(self, min_green: int = 15, max_green: int = 60,
-                 yellow: int = 3, queue_threshold: int = 5,
-                 wait_threshold: float = 30.0, name: str = "adaptive"):
+    def __init__(
+        self,
+        min_green: int = 15,
+        max_green: int = 60,
+        yellow: int = 3,
+        queue_threshold: int = 5,
+        wait_threshold: float = 30.0,
+        name: str = "adaptive",
+    ):
         """
         Args:
             min_green:       Minimum green duration (steps) before a switch
@@ -124,8 +145,13 @@ class AdaptiveStrategy(SignalStrategy):
     def name(self) -> str:
         return self._name
 
-    def determine_phase(self, current_phase: int, time_in_phase: int,
-                        queue_data: dict, delay_data: dict) -> int:
+    def determine_phase(
+        self,
+        current_phase: int,
+        time_in_phase: int,
+        queue_data: dict,
+        delay_data: dict,
+    ) -> int:
         """Applies threshold-based actuation with min/max green guards.
         
         Green phase logic (phase 0 or 2):

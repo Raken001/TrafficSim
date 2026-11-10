@@ -16,7 +16,11 @@ FLOW_DIRECTIONS = {
     "flow_EW": ("east", "EW"),
 }
 
-def _ensure_table_columns(conn: sqlite3.Connection, table_name: str, df: pd.DataFrame) -> None:
+def _ensure_table_columns(
+    conn: sqlite3.Connection,
+    table_name: str,
+    df: pd.DataFrame,
+) -> None:
     """Ensures all columns in df exist in SQLite table_name, adding missing columns dynamically."""
     try:
         cursor = conn.cursor()
@@ -46,7 +50,12 @@ class TrafficExperiment:
         self.route_file = route_file
         self.metrics = []
 
-    def generate_route_file(self, total_steps: int = 600, total_probability: float = 0.2, imbalance_ratio: float = 0.5) -> None:
+    def generate_route_file(
+        self,
+        total_steps: int = 600,
+        total_probability: float = 0.2,
+        imbalance_ratio: float = 0.5,
+    ) -> None:
         """Dynamically builds the traffic.rou.xml file based on imbalance ratio."""
         ns_prob = total_probability * imbalance_ratio
         ew_prob = total_probability * (1.0 - imbalance_ratio)
@@ -69,7 +78,12 @@ class TrafficExperiment:
             f.write(xml_content)
         print(f"Generated {self.route_file} (NS: {ns_prob:.3f}, EW: {ew_prob:.3f})")
 
-    def start_sim(self, seed: int = 42, tripinfo_file: str = None, use_gui: bool = False) -> None:
+    def start_sim(
+        self,
+        seed: int = 42,
+        tripinfo_file: str = None,
+        use_gui: bool = False,
+    ) -> None:
         """Initializes and launches the SUMO TraCI server session.
         
         :param seed: Random seed passed to SUMO for reproducible vehicle arrivals.
@@ -95,7 +109,17 @@ class TrafficExperiment:
             ]
         traci.start(sumo_cmd)
 
-    def run(self, strategy: SignalStrategy, total_steps: int = 600, warmup_steps: int = 100, total_prob: float = 0.2, imbalance: float = 0.5, seed: int = 42, use_gui: bool = False, batch_id: str = None) -> dict | None:
+    def run(
+        self,
+        strategy: SignalStrategy,
+        total_steps: int = 600,
+        warmup_steps: int = 100,
+        total_prob: float = 0.2,
+        imbalance: float = 0.5,
+        seed: int = 42,
+        use_gui: bool = False,
+        batch_id: str = None,
+    ) -> dict | None:
         """Executes the simulation loop for a specified number of steps and collect metrics.
         
         :param warmup_steps: Number of initial steps to run without recording metrics,
@@ -216,8 +240,14 @@ class TrafficExperiment:
 
         return result
 
-    def _build_metrics_df(self, strategy_name: str, imbalance: float, seed: int,
-                          batch_id: str, run_at: str) -> pd.DataFrame | None:
+    def _build_metrics_df(
+        self,
+        strategy_name: str,
+        imbalance: float,
+        seed: int,
+        batch_id: str,
+        run_at: str,
+    ) -> pd.DataFrame | None:
         """Constructs the simulation_metrics DataFrame without writing to the database.
 
         Used by parallel workers to return data to the master process for
@@ -234,9 +264,16 @@ class TrafficExperiment:
         df['run_at'] = run_at
         return df
 
-    def _build_trips_df(self, tripinfo_file: str, strategy_name: str, imbalance: float,
-                        seed: int, batch_id: str, run_at: str,
-                        warmup_time: float = 100.0) -> pd.DataFrame | None:
+    def _build_trips_df(
+        self,
+        tripinfo_file: str,
+        strategy_name: str,
+        imbalance: float,
+        seed: int,
+        batch_id: str,
+        run_at: str,
+        warmup_time: float = 100.0,
+    ) -> pd.DataFrame | None:
         """Parses SUMO tripinfo XML into a DataFrame without writing to the database.
 
         Used by parallel workers to return data to the master process for
@@ -290,7 +327,14 @@ class TrafficExperiment:
         os.remove(tripinfo_file)
         return df
 
-    def export_data(self, strategy: str, imbalance: float, seed: int, batch_id: str, run_at: str) -> None:
+    def export_data(
+        self,
+        strategy: str,
+        imbalance: float,
+        seed: int,
+        batch_id: str,
+        run_at: str,
+    ) -> None:
         """Appends recorded simulation metrics into SQLite database with batch tracking.
         
         Each orchestrator run produces a unique batch_id, so no data is ever deleted.
@@ -316,7 +360,16 @@ class TrafficExperiment:
         conn.close()
         print(f"Metrics exported to research_data.db (batch: {batch_id}).")
 
-    def export_trip_data(self, tripinfo_file: str, strategy: str, imbalance: float, seed: int, batch_id: str, run_at: str, warmup_time: float = 100.0) -> None:
+    def export_trip_data(
+        self,
+        tripinfo_file: str,
+        strategy: str,
+        imbalance: float,
+        seed: int,
+        batch_id: str,
+        run_at: str,
+        warmup_time: float = 100.0,
+    ) -> None:
         """Parses SUMO's per-vehicle tripinfo XML into the vehicle_trips table with batch tracking.
         
         Each row is one vehicle. Vehicles still in the network when the simulation
@@ -382,7 +435,11 @@ class TrafficExperiment:
         print(f"Exported {len(df)} vehicle trips ({int(df['finished'].sum())} finished) to vehicle_trips (batch: {batch_id}).")
 
 
-def bulk_insert_results(results: list, batch_id: str, db_file: str = "research_data.db") -> None:
+def bulk_insert_results(
+    results: list,
+    batch_id: str,
+    db_file: str = "research_data.db",
+) -> None:
     """Concatenates all worker DataFrames and inserts in a single transaction.
 
     Eliminates SQLite single-writer lock contention by collecting all data from
